@@ -2,22 +2,30 @@ import tiktoken
 import torch
 import torch.nn.functional as F
 from .gpt import GPT
+from .device import get_device
+
 
 def main():
     model = GPT.from_pretrained("gpt2")
     print("didn't crash yay!")
-
+    
     num_return_sequences = 5
     max_length = 30
 
+    device = get_device()
+    print(f"using device: {device}")
+
     model.eval()
+    model.to(device)
 
     enc = tiktoken.get_encoding("gpt2")
     tokens = enc.encode("Hello, I'm a language model,")
     tokens = torch.tensor(tokens, dtype=torch.long)
-    x = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+    x = tokens.unsqueeze(0).repeat(num_return_sequences, 1).to(device)
 
     torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
+    torch.mps.manual_seed(42)
 
     while x.size(1) < max_length:
         with torch.no_grad():
