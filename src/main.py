@@ -8,7 +8,7 @@ from .device import get_device
 def main():
     model = GPT.from_pretrained("gpt2")
     print("didn't crash yay!")
-    
+
     num_return_sequences = 5
     max_length = 30
 
@@ -32,7 +32,7 @@ def main():
             logits = model(x)
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
-            
+
             topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
             ix = torch.multinomial(topk_probs, num_samples=1)
             xcol = torch.gather(topk_indices, -1, ix)

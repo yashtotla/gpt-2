@@ -21,7 +21,7 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.gelu = nn.GELU(approximate="tanh")
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd)
-    
+
     def forward(self, x):
         x = self.c_fc(x)
         x = self.gelu(x)
@@ -41,7 +41,7 @@ class CausalSelfAttention(nn.Module):
 
     def forward(self, x):
         B, T, C = x.size()
-        
+
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
@@ -64,7 +64,7 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
-    
+
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
@@ -92,7 +92,7 @@ class GPT(nn.Module):
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
         pos_emd = self.transformer.wpe(pos)
         tok_emd = self.transformer.wte(idx)
-        
+
         x = tok_emd + pos_emd
         for block in self.transformer.h:
             x = block(x)
@@ -114,7 +114,7 @@ class GPT(nn.Module):
         config_args['vocab_size'] = 50257
         config_args['block_size'] = 1024
         config = GPTConfig(**config_args)
-        
+
         model = GPT(config)
         sd = model.state_dict()
         sd_keys = sd.keys()
