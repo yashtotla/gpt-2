@@ -6,12 +6,17 @@ from .device import get_device
 
 
 def main():
+    # to train from scratch instead: model = GPT(GPTConfig())
+    # - pytorch default-initialises all layers (e.g. xavier/kaiming for Linear)
+    #   so no extra work needed - outputs will be random garbage until trained
+    # - GPTConfig() defaults give the 124M param gpt2 (small) architecture
     model = GPT.from_pretrained("gpt2")
     print("didn't crash yay!")
 
     num_return_sequences = 5
     max_length = 30
 
+    # auto-detect best available device (cuda > mps > cpu)
     device = get_device()
     print(f"using device: {device}")
 

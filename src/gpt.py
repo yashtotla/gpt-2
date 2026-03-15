@@ -128,7 +128,10 @@ class GPT(nn.Module):
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
 
-        # position indices [0, 1, ..., T-1] - must be on same device as idx (CPU or GPU)
+        # device=idx.device: pos must live on the same device as idx
+        # - pytorch cannot combine tensors across devices (e.g. one on CPU, one on GPU)
+        # - tying pos to idx.device means forward works regardless of which device the
+        #   model and input were moved to - no manual device tracking needed at call sites
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
         pos_emd = self.transformer.wpe(pos)   # (T, n_embd)
         tok_emd = self.transformer.wte(idx)   # (B, T, n_embd)
