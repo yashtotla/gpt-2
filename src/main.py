@@ -80,13 +80,67 @@ def run_train():
     torch.cuda.manual_seed(1337)
     torch.mps.manual_seed(1337)
 
-    # small B=4, T=32 for debugging - just want a single cheap batch to verify the loop
-    # production runs use much larger B and T (e.g. B=16, T=1024)
-    train_loader = DataLoaderLite(B=4, T=32)
+    # B=16, T=1024: realistic workload for benchmarking throughput
+    # - max out batch size that fits in GPU; decrease if OOM
+    # - use power-of-2 friendly sizes (8, 16, 24, 32, 48); NOT e.g. 17 (inefficient on GPU)
+    # - tokens/sec is the objective metric, not ms/iter (batch size may change over time)
+    train_loader = DataLoaderLite(B=16, T=1024)
 
     # random init - GPTConfig() defaults to 124M param gpt2 (small) architecture
     model = GPT(GPTConfig())
     model.to(device)
+
+    # --- precision and tensor cores ---
+    # - pytorch default dtype: fp32 for all params, activations, grads
+    # - fp32 is overkill for DL: training tolerates much lower precision
+    #
+    # A100 80GB SXM peak throughput (without sparsity):
+    # - fp32:       19.5 TFLOPS
+    # - tf32:      156   TFLOPS  (8x)
+    # - bf16/fp16: 312   TFLOPS  (16x)
+    # - int8:      624   TFLOPS  (inference only; uniform spacing is a poor
+    #              fit for normal-distributed weights/activations)
+    #
+    # tensor cores: hardware 4x4 matmul instruction on A100
+    # - configurable input/accumulator/output precision
+    # - all large matmuls (linear layers) decomposed into these 4x4 ops
+    # - ref: A100 architecture white paper, figure 9
+    #
+    # memory bandwidth often the real bottleneck:
+    # - most DL training is memory-bound, not compute-bound
+    # - tensor cores idle waiting for data most of the time
+    # - 60% utilization = excellent for a well-tuned workload
+    # - lower precision = fewer bits per number = less memory + faster transfers
+    #
+    # TF32 (tensor float 32):
+    # - mantissa truncated: 23 bits -> 10 bits (32 -> 19 total bits)
+    # - internal to tensor core instruction; pytorch only sees fp32 in/out
+    # - accumulator still fp32
+    # - 8x matmul speedup, empirically indistinguishable from full fp32
+    # - zero code changes, slightly more approximate: very good tradeoff
+    # - observed on A100: 1000ms -> 333ms (~3x, not the theoretical 8x)
+    #   still memory-bound: numbers in memory are still fp32, only the matmul op itself is faster
+    torch.set_float32_matmul_precision('high')
+
+    # --- bf16 mixed precision via autocast ---
+    # bf16 vs fp16:
+    # - bf16: same exponent (8 bits) as fp32, truncates mantissa only
+    #   -> same range, less precision, NO gradient scaler needed
+    # - fp16: reduced exponent -> reduced range -> NEEDS gradient scalers
+    #   (extra state/complexity; fp16 came first on Volta, bf16 on Ampere simplified everything)
+    #
+    # torch.autocast usage:
+    # - wrap forward pass + loss calculation ONLY
+    # - do NOT wrap backward() or optimizer.step()
+    # - do NOT manually cast tensors to bf16; let autocast decide
+    #
+    # mixed precision: params stay fp32, activations selectively become bf16
+    # - matmuls -> bf16 (robust to precision changes)
+    # - normalizations, softmax, layernorm, loss -> stay fp32 (more susceptible)
+    #
+    # observed on A100: 333ms -> 300ms, ~55k tok/s
+    # - modest gain on top of TF32 because many other bottlenecks remain
+    # - worth the tradeoff: slightly less accurate, can train longer to compensate
 
     # AdamW: adam with decoupled weight decay (bugfix of adam, imo)
     # - keeps two buffers per param: m (first moment, like momentum) and v (second moment, like RMSProp)
@@ -95,18 +149,19 @@ def run_train():
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     for iter in range(50):
         x, y = train_loader.next_batch()
-        # data loader keeps tokens on CPU (avoids wasting GPU memory)
-        # must ship each batch to device before forward pass
-        # note: tensor.to(device) is NOT in-place, returns a new tensor on the target device
         x = x.to(device)
         y = y.to(device)
-        optimizer.zero_grad()       # must zero grads: .backward() does += on gradients, not =
-        logits, loss = model(x, y)
-        loss.backward()             # backprop: deposit gradients into all .grad tensors
-        optimizer.step()            # update params using AdamW rule
-        # loss.item(): extracts single-element tensor to a python float
-        # - behind the scenes: ships the 1-element tensor from GPU -> CPU, converts to float
-        print(f"iteration {iter}, loss {loss.item()}")
+        optimizer.zero_grad()
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(x, y)
+        loss.backward()
+        optimizer.step()
+        # GPU timing: CPU schedules work on GPU asynchronously (queues kernels)
+        # - without synchronize(), time.time() fires while GPU is still working
+        # - must drain GPU work queue before measuring wall time
+        torch.cuda.synchronize()
+        # first iteration often slower: pytorch lazily inits gradient buffers etc.
+        print(f"iteration {iter} | loss {loss.item():.4f}")
     # overfitting a single batch: if we do NOT call next_batch (reuse same x, y), loss
     # should drop to ~0 - the transformer memorises that one batch perfectly
     # with fresh batches: loss drops but not to 0 in 50 steps
