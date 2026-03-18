@@ -30,6 +30,7 @@ class MLP(nn.Module):
         # - modern nets (e.g. LLaMA 3) use SwiGLU and other variants instead
         self.gelu = nn.GELU(approximate="tanh")
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd)
+        # flag for residual stream scaling: c_proj output adds to the residual path
         self.c_proj.APPLY_SCALING = True
 
     def forward(self, x):
@@ -49,6 +50,7 @@ class CausalSelfAttention(nn.Module):
         # single linear projects q, k, v for all heads at once
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        # flag for residual stream scaling: c_proj output adds to the residual path
         self.c_proj.APPLY_SCALING = True
         self.n_head = config.n_head
         self.n_embd = config.n_embd
@@ -136,18 +138,40 @@ class GPT(nn.Module):
         # - empirically gives slightly better results, likely because fewer params + good inductive bias
         self.transformer.wte.weight = self.lm_head.weight
 
+        # self.apply(fn) iterates all submodules and calls fn on each
+        # note: because of weight tying, the shared wte/lm_head tensor gets initialized twice:
+        # once as Embedding (0.02), once as Linear (0.02) - same init so this is fine
         self.apply(self.init_weights)
 
     def init_weights(self, module):
+        # from openai gpt2 source (model.py): weights = normal(0, 0.02), biases = zeros
+        # std=0.02 is roughly consistent with xavier init (1/sqrt(n_features)):
+        # - 1/sqrt(768) = 0.036, 1/sqrt(1600) = 0.025, 1/sqrt(3200) = 0.018
+        # - so 0.02 is in the right ballpark across gpt2 model sizes
+        # - ideally you would scale with model size, but gpt2 hardcodes 0.02
         std = 0.02
         if isinstance(module, nn.Linear):
+            # residual stream scaling (gpt2 paper section 2.3):
+            # "a modified initialization which accounts for the accumulation on the
+            #  residual path with model depth is used. we scale the weights of residual
+            #  layers at initialization by a factor of 1/sqrt(N) where N is the number
+            #  of residual layers."
+            # - residual stream grows in variance as contributions are summed: after N
+            #   additions of unit-variance terms, std grows to sqrt(N)
+            # - scaling each contribution by 1/sqrt(N) keeps the residual stream at ~unit variance
+            # - 2 * n_layer because each transformer block has TWO residual additions:
+            #   one from attention and one from MLP
+            # - only applied to c_proj layers (the final projection before adding back
+            #   to the residual stream) - flagged via APPLY_SCALING attribute
             if hasattr(module, "APPLY_SCALING"):
                 std *= (2 * self.config.n_layer) ** -0.5
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            # pytorch default: bias init from uniform - gpt2 uses zeros instead
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+        # nn.LayerNorm: pytorch default is scale=1, offset=0 - already what we want, skip it
 
     def forward(self, idx, targets=None):
         # idx: (B, T) token indices
