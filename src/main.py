@@ -80,20 +80,26 @@ def run_train():
     torch.cuda.manual_seed(1337)
     torch.mps.manual_seed(1337)
 
+    # small B=4, T=32 for debugging - just want a single cheap batch to verify the loop
+    # production runs use much larger B and T (e.g. B=16, T=1024)
     train_loader = DataLoaderLite(B=4, T=32)
 
+    # random init - GPTConfig() defaults to 124M param gpt2 (small) architecture
     model = GPT(GPTConfig())
     model.to(device)
 
+    # AdamW: adam with decoupled weight decay - standard for transformer training
+    # lr=3e-4 is a safe default for debugging; will be scheduled properly later
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     for iter in range(50):
         x, y = train_loader.next_batch()
+        # must move x and y to the same device as the model
         x = x.to(device)
         y = y.to(device)
-        optimizer.zero_grad()
+        optimizer.zero_grad()       # reset gradients from previous iteration
         logits, loss = model(x, y)
-        loss.backward()
-        optimizer.step()
+        loss.backward()             # compute gradients via backprop
+        optimizer.step()            # update weights
         print(f"iteration {iter}, loss {loss.item()}")
 
 

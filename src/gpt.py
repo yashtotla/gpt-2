@@ -162,9 +162,18 @@ class GPT(nn.Module):
         # - one softmax away from probabilities
         logits = self.lm_head(x)
 
-        if targets is None:
-            loss = None
-        else:
+        loss = None
+        if targets is not None:
+            # cross entropy loss:
+            # - F.cross_entropy does not accept 3D inputs directly
+            # - flatten logits: (B, T, vocab_size) -> (B*T, vocab_size)
+            # - flatten targets: (B, T) -> (B*T,)
+            # - each of the B*T positions is treated as an independent example
+            # - loss = mean negative log-likelihood across all positions
+            #
+            # sanity check at random init: every token equally likely -> p = 1/50257
+            # expected loss = -log(1/50257) = log(50257) ~= 10.82
+            # seeing ~11 at init confirms weights are diffuse, not confidently wrong
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
         return logits, loss
