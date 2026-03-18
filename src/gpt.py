@@ -121,7 +121,7 @@ class GPT(nn.Module):
         # lm_head: projects 768 -> vocab_size (50257), no bias (gpt2 paper)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         # idx: (B, T) token indices
         # - B: batch of independent sequences packed together for efficiency
         # - T: sequence length (up to block_size); each row is one sequence of T tokens
@@ -146,7 +146,13 @@ class GPT(nn.Module):
         # - at every (b, t) position: distribution over what token comes next (t+1)
         # - one softmax away from probabilities
         logits = self.lm_head(x)
-        return logits
+
+        if targets is None:
+            loss = None
+        else:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type):
