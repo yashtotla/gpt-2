@@ -102,6 +102,8 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         # transformer = repeated map-reduce: tokens communicate (attn), then think (mlp)
         # each block iteratively refines representations in the residual stream
+        # - nearly all compute is matmuls in linear layers (c_attn, c_proj, c_fc)
+        # - gelu, layernorm, residual adds: negligible in comparison
         return x
 
 
@@ -123,6 +125,7 @@ class GPT(nn.Module):
         ))
 
         # lm_head: projects 768 -> vocab_size (50257), no bias (gpt2 paper)
+        # - at 124M scale, single largest matmul in the network by far
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # weight tying scheme (from "Using the Output Embedding to Improve Language Models", 2017)
