@@ -76,6 +76,10 @@ def run_train():
     device = get_device()
     print(f"using device: {device}")
 
+    torch.manual_seed(1337)
+    torch.cuda.manual_seed(1337)
+    torch.mps.manual_seed(1337)
+
     train_loader = DataLoaderLite(B=4, T=32)
 
     model = GPT(GPTConfig())
