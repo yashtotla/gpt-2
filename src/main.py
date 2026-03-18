@@ -88,19 +88,32 @@ def run_train():
     model = GPT(GPTConfig())
     model.to(device)
 
-    # AdamW: adam with decoupled weight decay - standard for transformer training
-    # lr=3e-4 is a safe default for debugging; will be scheduled properly later
+    # AdamW: adam with decoupled weight decay (bugfix of adam, imo)
+    # - keeps two buffers per param: m (first moment, like momentum) and v (second moment, like RMSProp)
+    # - per-element gradient normalization -> much faster convergence than SGD for LLMs
+    # - lr=3e-4: safe default for early debugging; will be scheduled properly later
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     for iter in range(50):
         x, y = train_loader.next_batch()
-        # must move x and y to the same device as the model
+        # data loader keeps tokens on CPU (avoids wasting GPU memory)
+        # must ship each batch to device before forward pass
+        # note: tensor.to(device) is NOT in-place, returns a new tensor on the target device
         x = x.to(device)
         y = y.to(device)
-        optimizer.zero_grad()       # reset gradients from previous iteration
+        optimizer.zero_grad()       # must zero grads: .backward() does += on gradients, not =
         logits, loss = model(x, y)
-        loss.backward()             # compute gradients via backprop
-        optimizer.step()            # update weights
+        loss.backward()             # backprop: deposit gradients into all .grad tensors
+        optimizer.step()            # update params using AdamW rule
+        # loss.item(): extracts single-element tensor to a python float
+        # - behind the scenes: ships the 1-element tensor from GPU -> CPU, converts to float
         print(f"iteration {iter}, loss {loss.item()}")
+    # overfitting a single batch: if we do NOT call next_batch (reuse same x, y), loss
+    # should drop to ~0 - the transformer memorises that one batch perfectly
+    # with fresh batches: loss drops but not to 0 in 50 steps
+    # - easy early gains: driving logits of tokens that never occur in the dataset to -inf
+    #   (e.g. exotic unicode, other languages) lowers loss without learning real patterns
+    # - with B=4, T=32 on tiny shakespeare (~338k tokens): 1 epoch = ~2600 batches
+    #   so 50 steps is not even close to 1 epoch
 
 
 def main():

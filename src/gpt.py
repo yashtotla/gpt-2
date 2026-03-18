@@ -122,7 +122,20 @@ class GPT(nn.Module):
 
         # lm_head: projects 768 -> vocab_size (50257), no bias (gpt2 paper)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+        # weight tying scheme (from "Using the Output Embedding to Improve Language Models", 2017)
+        # - also used in "Attention Is All You Need" (section 3.4)
+        # - wte (token embedding at bottom) and lm_head (classifier at top) share the SAME tensor
+        # - intuition: if two tokens are semantically similar (e.g. uppercase vs lowercase),
+        #   they should be nearby in embedding space AND get similar output probabilities
+        #   so both layers want similar weight structure -> tie them
+        # - this copies the data pointer, not the data; old wte.weight becomes orphaned (GC cleans it up)
+        # - in backward pass: gradients from both branches (embedding lookup + classifier matmul)
+        #   accumulate into the same tensor via +=
+        # - saves 768 * 50257 = ~38.6M params (~31% of 124M total) - massive param reduction
+        # - empirically gives slightly better results, likely because fewer params + good inductive bias
         self.transformer.wte.weight = self.lm_head.weight
+
         self.apply(self.init_weights)
 
     def init_weights(self, module):

@@ -2,8 +2,12 @@ import tiktoken
 import torch
 
 class DataLoaderLite:
-    # minimal dataloader for debugging - tiny shakespeare (~1M chars, ~300k tokens)
-    # gpt2 tokenizer compression ratio ~3:1 (chars -> tokens)
+    # "lite" - minimal CPU-only dataloader, good enough for early debugging
+    # - tiny shakespeare: ~1M chars, ~338k tokens (gpt2 BPE ~3:1 compression)
+    # - all ASCII, no exotic unicode
+    # - tokens stay on CPU; caller ships each batch to GPU to avoid wasting VRAM
+    # - walks the document in non-overlapping B*T chunks, wraps at end
+    # - will be replaced with something more serious later (shuffling, sharding, etc.)
     def __init__(self, B, T):
         self.B = B
         self.T = T
