@@ -90,6 +90,31 @@ def run_train():
     model = GPT(GPTConfig())
     model.to(device)
 
+    # --- torch.compile: "GCC for neural nets" ---
+    # - analyzes entire nn.Module upfront, compiles optimized forward pass
+    # - costs compilation time on first call, then runs much faster
+    # - no reason not to use it unless debugging
+    #
+    # speedup source 1: eliminates python overhead
+    # - without compile ("eager mode"): python interpreter walks forward() line by line,
+    #   dispatching one GPU kernel at a time, not knowing what comes next
+    # - with compile: python interpreter removed from forward pass entirely,
+    #   entire net compiled as a single object, knows full computation graph
+    #
+    # speedup source 2: kernel fusion (reduces GPU memory round-trips)
+    # - GPU memory hierarchy:
+    #   - HBM (high bandwidth memory): tens of GB, off-chip, ~2 TB/s but slow relative to compute
+    #   - L2 cache: on-chip, shared across SMs (streaming multiprocessors)
+    #   - L1 cache / registers: on-chip per-SM, extremely fast, only ~tens of MB total
+    # - without fusion: each elementwise op = separate kernel = full round-trip to HBM
+    #   e.g. GELU broken into x^3, multiply, add: 3 separate HBM round-trips
+    # - with fusion: all elementwise ops merged into one kernel, data loaded to chip once,
+    #   all ops done on-chip (fast), single write back to HBM
+    # - this is why memory-bound ops (gelu, layernorm, residual adds) get much faster
+    #
+    # observed on A100: 300ms -> ~130ms (~2.3x), ~125k tok/s
+    model = torch.compile(model)
+
     # --- precision and tensor cores ---
     # - pytorch default dtype: fp32 for all params, activations, grads
     # - fp32 is overkill for DL: training tolerates much lower precision
