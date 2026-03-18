@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from .gpt import GPT, GPTConfig
 from .device import get_device
+from .data_loader import DataLoaderLite
 
 
 def run_pretrained():
@@ -75,21 +76,16 @@ def run_train():
     device = get_device()
     print(f"using device: {device}")
 
-    enc = tiktoken.get_encoding("gpt2")
-    text = open("./dataset/input.txt", "r").read()[:1000]
-
-    tokens = enc.encode(text)
-    B, T = 4, 32
-    buf = torch.tensor(tokens[:B*T + 1]).to(device)
-
-    x = buf[:-1].view(B, T)
-    y = buf[1:].view(B, T)
+    train_loader = DataLoaderLite(B=4, T=32)
 
     model = GPT(GPTConfig())
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     for iter in range(50):
+        x, y = train_loader.next_batch()
+        x = x.to(device)
+        y = y.to(device)
         optimizer.zero_grad()
         logits, loss = model(x, y)
         loss.backward()
