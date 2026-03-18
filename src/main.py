@@ -1,11 +1,12 @@
+import argparse
 import tiktoken
 import torch
 import torch.nn.functional as F
-from .gpt import GPT
+from .gpt import GPT, GPTConfig
 from .device import get_device
 
 
-def main():
+def run_pretrained():
     # to train from scratch instead: model = GPT(GPTConfig())
     # - pytorch default-initialises all layers (e.g. xavier/kaiming for Linear)
     #   so no extra work needed - outputs will be random garbage until trained
@@ -58,7 +59,7 @@ def main():
             # - keep only top 50 most likely tokens, clamp rest to 0, renormalize
             # - prevents sampling very rare tokens that send the model off the rails
             topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
-            ix = torch.multinomial(topk_probs, num_samples=1)  # sample 1 token per row
+            ix = torch.multinomial(topk_probs, num_samples=1)   # sample 1 token per row
             xcol = torch.gather(topk_indices, -1, ix)           # map back to vocab indices
             x = torch.cat((x, xcol), dim=1)                     # append new column
 
@@ -67,6 +68,45 @@ def main():
         tokens = x[i, :max_length].tolist()
         decoded = enc.decode(tokens)
         print("> ", decoded)
+
+
+def run_train():
+
+    device = get_device()
+    print(f"using device: {device}")
+
+    enc = tiktoken.get_encoding("gpt2")
+    text = open("./dataset/input.txt", "r").read()[:1000]
+
+    tokens = enc.encode(text)
+    B, T = 4, 32
+    buf = torch.tensor(tokens[:B*T + 1]).to(device)
+
+    x = buf[:-1].view(B, T)
+    y = buf[1:].view(B, T)
+
+    model = GPT(GPTConfig())
+    model.to(device)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    for iter in range(50):
+        optimizer.zero_grad()
+        logits, loss = model(x, y)
+        loss.backward()
+        optimizer.step()
+        print(f"iteration {iter}, loss {loss.item()}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["pretrained", "train"], required=True)
+    args = parser.parse_args()
+
+    if args.mode == "pretrained":
+        run_pretrained()
+    elif args.mode == "train":
+        run_train()
+
 
 if __name__ == "__main__":
     main()
